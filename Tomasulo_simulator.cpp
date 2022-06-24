@@ -16,6 +16,14 @@ class CPU
     ui reg[32],mem[50000],qreg[32];
     ui PC,IR,rd,rs1,rs2,imm;
     string rev;
+    string revtoma;
+    inline ui tar(const ui &x,int st,int en)
+    {
+        ui tmp=((ui)0xfffffff)>>st;
+        tmp<<=st+32-en;
+        tmp>>=32-en;
+        return x&tmp;
+    }
     inline ui Hex_DC(char buf[],int st,int en)
     {
         ui x=0;
@@ -28,7 +36,7 @@ class CPU
         }
         return x;
     }
-    CPU(string filename):PC(0),IR(0),imm(0),rs1(0),rs2(0),rd(0),rev("IUSBRJE")
+    CPU(string filename):PC(0),IR(0),imm(0),rs1(0),rs2(0),rd(0),rev("IUSBRJE"),revtoma("FLSJE")
     {
         fstream f;
         f.open(filename,ios::in);
@@ -41,7 +49,7 @@ class CPU
         while(1)
         {
             f.getline(buffer,90);
-            test(buffer);
+            //test(buffer);
             //test('\n');
             if(buffer[0]=='#')
                 break;
@@ -60,7 +68,7 @@ class CPU
                 //test(mem[PC-1]);
                 //test(' ');
             }
-            test('\n');
+            //test('\n');
         }
         f.close();
         PC=0;
@@ -110,7 +118,7 @@ class CPU
         ERROR=-1
     };
     enum tomatype{
-        FP,LOAD,STORE,NONE=-1
+        FP,LOAD,STORE,JUMP,NONE=-1
     };
     command cmdset[38]={LUI,AUIPC,JAL,JALR,BEQ,BNE,BLT,BGE,BLTU,BGEU,LB,LH,LW,LBU,LHU,SB,SH,SW,ADDI,SLTI,SLTIU,XORI,ORI,ANDI,SLLI,SRLI,ADD,SUB,SLL,SLT,SLTU,XOR,SRL,SRA,OR,AND};
     class input
@@ -145,7 +153,11 @@ class CPU
         }
         inline bool push(const input &x)
         {
-            if(full())return false;
+            if(full())
+            {
+                cerr<<"queue full\n";
+                return false;
+            }
             q[++rear]=x;
             return true;
         }
@@ -155,7 +167,10 @@ class CPU
         }
         inline void pop()
         {
-            if(empty());//MD?
+            if(empty()){
+                cerr<<"queue full\n";
+                return;
+            }//MD?
             frt=(frt+1)%siz;
         }
     };
@@ -225,6 +240,15 @@ class CPU
             case SH:
             case SW:
                 return tomatype::STORE;
+            case JAL:
+            case JALR:
+            case BEQ:
+            case BNE:
+            case BLT:
+            case BGE:
+            case BLTU:
+            case BGEU:
+                return tomatype::JUMP;
             default:
                 return tomatype::FP;
         }
@@ -243,9 +267,9 @@ class CPU
     }
     inline ui get_rd(ui x)
     {
-        test("getrd\n");
-        cout<<bitset<32>(x)<<endl;
-        cout<<bitset<32>((x&((ui)0x00000f80))>>7)<<endl;
+        //test("getrd\n");
+        //cout<<bitset<32>(x)<<endl;
+        //cout<<bitset<32>((x&((ui)0x00000f80))>>7)<<endl;
         return (x&((ui)0x00000f80))>>7;
     }
     inline ui get_funct3(ui x)
@@ -354,9 +378,10 @@ class CPU
                     ip.qj=qreg[rs1];
                 ip.dest=rd;
                 qreg[rd]=(IQ.rear+1)%IQ.siz;
+                if(ip.cmd==JALR)
+                    ip.vk=PC;
                 break;
             case S:
-            case B:
                 rs1=get_rs1(ip.x);
                 rs2=get_rs2(ip.x);
                 imm=get_immediate(ip.x,ip.type);
@@ -366,10 +391,22 @@ class CPU
                     ip.qk=qreg[rs2];
                 ip.A=imm;
                 break;
+            case B:
+                rs1=get_rs1(ip.x);
+                rs2=get_rs2(ip.x);
+                imm=get_immediate(ip.x,ip.type);
+                if(qreg[rs1])
+                    ip.qj=qreg[rs1];
+                if(qreg[rs2])
+                    ip.qk=qreg[rs2];
+                ip.A=imm&0;//SP
+                ip.dest=PC;
+                break;
             case U:
             case UJ:
                 rd=get_rd(ip.x);
                 imm=get_immediate(ip.x,ip.type);
+                ip.vk=PC;
                 ip.A=imm;
                 ip.dest=rd;
                 qreg[rd]=(IQ.rear+1)%IQ.siz;
@@ -382,10 +419,10 @@ class CPU
         ip.tag=ROB.rear;
         IQ.push(ip);
         ROB.q[ROB.rear].tag=IQ.rear;
-        /*printf("PC:%u opcode:%u type:%c funct3:%u funt7:%u rs1:%u rs2:%u rd:%u imm:%u\n",PC,code,rev[ip.type],f3,f7,rs1,rs2,rd,imm);
+        printf("[DECODING...]PC:%u opcode:%u type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%u\n",PC,ip.cmd,rev[ip.type],revtoma[ip.tomatype],IQ.q[ip.tag].vj,IQ.q[ip.tag].vk,ip.dest,ip.A);
         fstream f("output.data",ios::out|ios::app);
         f<<code<<" ";
-        f.close();*/
+        f.close();
 
     }
     inline void sign_extend(ui &x,int pos){
@@ -396,105 +433,114 @@ class CPU
         ui x=0;
         for(int i=3;i>=0;--i)
             x=(x<<8)|mem[PC+i];
-        PC+=4;
         decode(input(x));
     }
     inline ui EXE(input ip)//MD?
     {
+        printf("[EXECUTING...]opcode:%u type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%u\n",ip.cmd,rev[ip.type],revtoma[ip.tomatype],IQ.q[ip.tag].vj,IQ.q[ip.tag].vk,ip.dest,ip.A);
         ui ans;
         switch (ip.cmd)
         {
             case LUI:
+                break;
             case AUIPC:
+                ip.A=ip.vj+ip.A;
+                break;
             case JAL:
-            case JALR:
+                break;
             case BEQ:
             case BNE:
             case BLT:
             case BGE:
             case BLTU:
             case BGEU:
+                ip.A+=ip.dest;
+                break;
+            case JALR:
+                ip.A=ip.A+ip.vj;
                 break;
             case LB:
-                ip.A=ip.qj+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break;
             case LH:
-                ip.A=ip.qj+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break;    
             case LW:
-                ip.A=ip.qj+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break; 
             case LBU:
-                ip.A=ip.qj+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break;
             case LHU:
-                ip.A=ip.qj+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break;
             case SB:
-                ip.A=ip.qj+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break;
             case SH:
-                ip.A=ip.qj+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break;
             case SW:
-                ip.A=ip.qj+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break;                                                                 
             case ADDI:
-                reg[rd]=reg[rs1]+(int)imm;
+                ip.A=ip.vj+(int)ip.A;
                 break;
             case SLTI:
-                reg[rd]=((int)reg[rs1]<(int)imm)?1:0;
+                ip.A=(int)ip.vj<(int)ip.A;
                 break;
             case SLTIU:
-                reg[rd]=(reg[rs1]<imm)?1:0;
+                ip.A=ip.vj<ip.A;
                 break;
             case XORI:
-                reg[rd]=reg[rs1]^imm;
+                ip.A=ip.vj^ip.A;
                 break;
             case ORI:
-                reg[rd]=reg[rs1]|imm;
+                ip.A=ip.vj|ip.A;
                 break;
             case ANDI:
-                reg[rd]=reg[rs1]&imm;
+                ip.A=ip.vj&ip.A;
                 break;
-            case SLLI:
-                reg[rd]=reg[rs1]<<imm;
+            case SLLI://SP?
+                ip.A=ip.vj<<tar(ip.A,0,5);
                 break;
-            case SRLI:
-                reg[rd]=reg[rs1]>>imm;
+            case SRLI://SP?
+                ip.A=ip.vj<<tar(ip.A,0,5);
                 break;
             case SRAI://?????
-                reg[rd]=reg[rs1]>>imm;
+                ip.A=ip.vj>>tar(ip.A,0,5);
+                sign_extend(ip.A,31-tar(ip.A,0,5));//CHECK?
                 break;
             case ADD:
-                reg[rd]=reg[rs1]+reg[rs2];
+                ip.A=ip.vj+ip.vk;
                 break;
             case SUB:
-                reg[rd]=reg[rs1]-reg[rs2];
+                ip.A=ip.vj-ip.vk;
                 break;
-            case SLL:
-                reg[rd]=reg[rs1]<<reg[rs2];
+            case SLL://SP?
+                ip.A=ip.vj<<tar(ip.vk,0,5);
                 break;
             case SLT:
-                reg[rd]=((int)reg[rs1]<(int)reg[rs2])?1:0;
+                ip.A=(int)ip.vj<(int)ip.vk;
                 break;
             case SLTU:
-                reg[rd]=(reg[rs1]<reg[rs2])?1:0;
+                ip.A=ip.vj<ip.vk;
                 break;
             case XOR:
-                reg[rd]=reg[rs1]^reg[rs2];
+                ip.A=ip.vj^ip.vk;
                 break;
             case SRL:
-                reg[rd]=reg[rs1]>>reg[rs2];
+                ip.A=ip.vj>>tar(ip.vk,0,5);
                 break;
             case SRA:
-                reg[rd]=reg[rs1]>>reg[rs2];
+                ip.A=ip.vj>>tar(ip.A,0,5);
+                sign_extend(ip.A,31-tar(ip.A,0,5));//CHECK?
                 break;
             case OR:
-                reg[rd]=reg[rs1]|reg[rs2];
+                ip.A=ip.vj|ip.vk;
                 break;
             case AND:
-                reg[rd]=reg[rs1]&reg[rs2];
+                ip.A=ip.vj&ip.vk;
                 break;
             default:
                 cerr<<"unexpected command at [EXE]"<<endl;
@@ -504,181 +550,169 @@ class CPU
     inline ui WB(input ip)//MD?
     {
         ui ans;
+        ROB.q[ip.tag].busy=true;
+        printf("[WBING...]opcode:%u type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%u\n",ip.cmd,rev[ip.type],revtoma[ip.tomatype],IQ.q[ip.tag].vj,IQ.q[ip.tag].vk,ip.dest,ip.A);
         switch (ip.cmd)
         {
-            case LUI:
-                reg[rd]=(imm);
-                break;
-            case AUIPC:
-                mem[PC]=imm;
-                reg[rd]=mem[PC];
-            case JAL:
-                reg[rd]=PC+4;
-                PC+=imm;
-                break;
-            case JALR:
-                reg[rd]=PC+4;
-                PC+=imm;
-                break;
             case BEQ:
-                if(reg[rs1]==reg[rs2])
-                    PC+=imm;
-                break;
+                if(ip.vj!=ip.vk)
+                    break;
             case BNE:
-                if(reg[rs1]!=reg[rs2])
-                    PC=reg[rs1]+imm;
-                break;
+                if(ip.vj==ip.vk)
+                    break;
             case BLT:
-                if((int)reg[rs1]<(int)reg[rs2])
-                    PC+=imm;
-                break;
+                if((int)ip.vj>=(int)ip.vk)
+                    break;
             case BGE:
-                if((int)reg[rs1]>=(int)reg[rs2])
-                    PC+=imm;
-                break;
+                if((int)ip.vj<(int)ip.vk)
+                    break;
             case BLTU:
-                if(reg[rs1]<reg[rs2])
-                    PC+=imm;
-                break;
+                if(ip.vj>=ip.vk)
+                    break;
             case BGEU:
-                if(reg[rs1]>=reg[rs2])
-                    PC+=imm;
-                break;
-            case LB:
-                ans=mem[reg[rs1]+(int)imm];
-                sign_extend(ans,7);
-                reg[rd]=ans;
-                break;
-            case LH:
-                ans=mem[reg[rs1]+(int)imm];
-                ans=(ans<<8)|mem[reg[rs1]+(int)imm+1];
-                sign_extend(ans,15);
-                reg[rd]=ans;
-                break;    
-            case LW:
-                ans=0;
-                for(int i=reg[rs1]+(int)imm;i<reg[rs1]+(int)imm+4;++i)
-                    ans=(ans<<8)|mem[i];
-                reg[rd]=ans;
-                break;
-            case LBU:
-                ans=mem[reg[rs1]+(int)imm];
-                reg[rd]=ans;
-                break;
-            case LHU:
-                ans=mem[reg[rs1]+(int)imm];
-                ans=(ans<<8)|mem[reg[rs1]+(int)imm+1];
-                reg[rd]=ans;
-                break;
-            case SB:
-                ans=reg[rs2]&((ui)0xff);
-                mem[reg[rs1]+(int)imm+3]=((reg[rs2]>>8)<<8)|ans;
-                break;
-            case SH:
-                ans=reg[rs2]&((ui)0xffff);
-                mem[reg[rs1]+(int)imm+3]=ans&((ui)0xff);
-                mem[reg[rs1]+(int)imm+2]=(ans&(ui)0xff00)>>8;
-                break;
-            case SW:
-                for(int i=3;i>=0;--i)
-                    mem[reg[rs1]+(int)imm+i]=(reg[rs2]&((ui)0xff<<(3-i)))>>(3-i);
-                break;
-            case ADDI:
-                reg[rd]=reg[rs1]+(int)imm;
-                break;
-            case SLTI:
-                reg[rd]=((int)reg[rs1]<(int)imm)?1:0;
-                break;
-            case SLTIU:
-                reg[rd]=(reg[rs1]<imm)?1:0;
-                break;
-            case XORI:
-                reg[rd]=reg[rs1]^imm;
-                break;
-            case ORI:
-                reg[rd]=reg[rs1]|imm;
-                break;
-            case ANDI:
-                reg[rd]=reg[rs1]&imm;
-                break;
-            case SLLI:
-                reg[rd]=reg[rs1]<<imm;
-                break;
-            case SRLI:
-                reg[rd]=reg[rs1]>>imm;
-                break;
-            case SRAI://?????
-                reg[rd]=reg[rs1]>>imm;
-                break;
-            case ADD:
-                reg[rd]=reg[rs1]+reg[rs2];
-                break;
-            case SUB:
-                reg[rd]=reg[rs1]-reg[rs2];
-                break;
-            case SLL:
-                reg[rd]=reg[rs1]<<reg[rs2];
-                break;
-            case SLT:
-                reg[rd]=((int)reg[rs1]<(int)reg[rs2])?1:0;
-                break;
-            case SLTU:
-                reg[rd]=(reg[rs1]<reg[rs2])?1:0;
-                break;
-            case XOR:
-                reg[rd]=reg[rs1]^reg[rs2];
-                break;
-            case SRL:
-                reg[rd]=reg[rs1]>>reg[rs2];
-                break;
-            case SRA:
-                reg[rd]=reg[rs1]>>reg[rs2];
-                break;
-            case OR:
-                reg[rd]=reg[rs1]|reg[rs2];
-                break;
-            case AND:
-                reg[rd]=reg[rs1]&reg[rs2];
-                break;
+                if(ip.vj<ip.vk)
+                    break;
             default:
-                cerr<<"unexpected command at [EXE]"<<endl;
+                ROB.q[ip.tag].A=ip.A;
         }
         return ans;       
     }
     inline ui COMMIT(input ip)//MD?
-    {}
-    inline void upd()
+    {
+        ui ans;
+        printf("[COMMITING...]opcode:%u type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%u\n",ip.cmd,rev[ip.type],revtoma[ip.tomatype],IQ.q[ip.tag].vj,IQ.q[ip.tag].vk,ip.dest,ip.A);
+        switch (ip.cmd)
+        {
+            case LUI:
+                reg[ip.dest]=ip.A;
+                break;
+            case AUIPC:
+                reg[ip.dest]=ip.A;
+                break;
+            case JAL:
+            case JALR:
+                reg[ip.dest]=PC+4;
+                PC=ip.A;//MD
+                break;
+            case BEQ:
+            case BNE:
+            case BLT:
+            case BGE:
+            case BLTU:
+            case BGEU:
+                PC=ip.A;
+                break;
+            case LB:
+                reg[ip.dest]=mem[ip.A];
+                sign_extend(reg[ip.dest],7);
+                break;
+            case LH:
+                reg[ip.dest]=mem[ip.A+1];
+                reg[ip.dest]=(reg[ip.dest]<<8)|mem[ip.A];
+                sign_extend(reg[ip.dest],15);
+                break;    
+            case LW:
+                reg[ip.dest]=0;
+                for(int i=3;i>=0;--i)
+                    reg[ip.dest]=(reg[ip.dest]<<8)|mem[ip.A+i];
+                break; 
+            case LBU:
+                reg[ip.dest]=mem[ip.A];
+                break;
+            case LHU:
+                reg[ip.dest]=mem[ip.A+1];
+                reg[ip.dest]=(reg[ip.dest]<<8)|mem[ip.A];
+                break;
+            case SB:
+                mem[ip.A]=tar(ip.vk,0,7);
+                break;
+            case SH:
+                mem[ip.A+1]=tar(ip.vk,0,7);
+                mem[ip.A]=tar(ip.vk,8,15);
+                break;
+            case SW:
+                for(int i=3;i>=0;--i)
+                    mem[ip.A+i]=tar(ip.vk,8*(3-i),8*(4-i)-1);
+                break;                                                                 
+            case ADDI:
+            case SLTI:
+            case SLTIU:
+            case XORI:
+            case ORI:
+            case ANDI:
+            case SLLI:
+            case SRLI:
+            case SRAI:
+            case ADD:
+            case SUB:
+            case SLL:
+            case SLT:
+            case SLTU:
+            case XOR:
+            case SRL:
+            case SRA:
+            case OR:
+            case AND:
+                reg[ip.dest]=ip.A;
+                break;
+            default:
+                cerr<<"unexpected command at [COMMIT]"<<endl;
+        }
+        return ans;
+    }
+    inline void broadcast(int i)
+    {
+        if(IQ.q[i].tomatype!=STORE)
+        {
+            for(int j=(IQ.frt+1)%IQ.siz;j!=IQ.rear;j=(j+1)%IQ.siz)
+            {
+                if(IQ.q[j].qk==i)
+                {   
+                    IQ.q[j].vk=IQ.q[i].A; 
+                    IQ.q[j].qk=0;
+                }
+                if(IQ.q[j].qj==i)
+                {   
+                    IQ.q[j].vj=IQ.q[i].A; 
+                    IQ.q[j].qj=0;
+                }
+            }
+            ROB.q[IQ.q[i].tag].busy=true;
+            ROB.q[IQ.q[i].tag].A=IQ.q[i].A;
+        }
+        else
+        {
+            for(int j=(IQ.frt+1)%IQ.siz;j!=IQ.rear;j=(j+1)%IQ.siz)
+            {
+                if(IQ.q[j].qj==ROB.front().tag)
+                    IQ.q[j].qj=0;
+            }
+        }
+        for(int j=0;j<32;++j)
+            if(qreg[j]==i)
+                qreg[j]=0;
+    }
+    inline ui upd()
     {
         for(int i=(IQ.frt+1)%IQ.siz;i!=IQ.rear;i=(i+1)%IQ.siz)
         {
+            printf("[QUEUE UPDATING...]opcode:%u type:%c tomatype:%c qj:%u qk:%u imm:%u\n",IQ.q[i].cmd,rev[IQ.q[i].type],revtoma[IQ.q[i].tomatype],IQ.q[i].qj,IQ.q[i].qk,IQ.q[i].dest,IQ.q[i].A);
             if(IQ.q[i].time==-1)
                 continue;
             if(!IQ.q[i].time)
             {
                 WB(IQ.q[i]);
                 if(IQ.q[i].tomatype!=STORE)
-                {
-                    for(int j=(IQ.frt+1)%IQ.siz;j!=IQ.rear;j=(j+1)%IQ.siz)
-                    {
-                        if(IQ.q[j].qk==i)
-                            IQ.q[j].qk=0;
-                        if(IQ.q[j].qj==i)
-                            IQ.q[j].qj=0;
-                    }
-                    for(int i=0;i<32;++i)
-                        if(qreg[i]==i)
-                            qreg[i]=0;
-                    ROB.q[IQ.q[i].tag].busy=true;
-                    ROB.q[IQ.q[i].tag].A=IQ.q[i].A;
-                }
-                --IQ.q[i].time;
+                    broadcast(i);
+                --IQ.q[i].time;//to make it -1
+                continue;
             }
-            if((!IQ.q[i].qj)&(!IQ.q[i].qk))
+            if((!IQ.q[i].qj)&&(!IQ.q[i].qk)&&(!IQ.q[i].solve))
             {
-                if((IQ.q[i].tomatype==LOAD||IQ.q[i].tomatype==STORE)&&(!IQ.q[i].solve))
-                {
-                    EXE(IQ.q[i]);
-                    IQ.q[i].solve=1;
+                EXE(IQ.q[i]);
+                if((IQ.q[i].tomatype==LOAD||IQ.q[i].tomatype==STORE))
+                { 
+                    IQ.q[i].solve=true;
                     ROB.q[IQ.q[i].tag].A=IQ.q[i].A;
                     for(int j=(ROB.frt+1)%ROB.siz;j!=IQ.q[i].tag;j=(j+1)%ROB.siz)
                     {
@@ -688,28 +722,31 @@ class CPU
                             break;
                         }
                     }
-                    if(!IQ.q[i].qj)
-                        IQ.q[i].busy=true;
                     continue;
                 }
+                //EXE(IQ.q[i]);
+                IQ.q[i].busy=true; 
+            }
             if(IQ.q[i].busy)
                 --IQ.q[i].time;
-            }
         }
-        if(ROB.front().busy)
+        if((!ROB.empty())&&ROB.front().busy)
         {
-            COMMIT(ROB.front());
-            if(ROB.front().tomatype==STORE)
-            {
-                for(int j=(IQ.frt+1)%IQ.siz;j!=IQ.rear;j=(j+1)%IQ.siz)
-                {
-                    if(IQ.q[j].qj==ROB.front().tag)
-                        IQ.q[j].qj=0;
-                }
+            if(ROB.front().x==((ui)0x0ff00513))
+                return reg[10]&((ui)255);
+            if(ROB.front().tomatype==JUMP&&ROB.front().A)
+            {    
+                ROB.rear=(ROB.frt+1)%ROB.siz;    
+                IQ.rear=(IQ.frt+1)%IQ.siz;//Q.clear()
             }
+            if(ROB.front().tomatype==STORE)
+                broadcast(ROB.front().tag);
+            COMMIT(ROB.front());
             ROB.pop();
             IQ.pop();//MD?
         }
+        reg[0]=0;//SP
+        return 0;
     }
     inline void print()
     {
@@ -723,11 +760,19 @@ int main()
 {
     fstream f("output.data",ios::out|ios::trunc);
     f.close();
-    CPU T("array_test1.data");
-    for(int i=1;i<=5;++i)
+    CPU T("sample.data");
+    for(int i=1;i<=10;++i)
     {
+        printf("[Cycle %d]\n",i);
         T.IF();
-        T.upd();
+        //cout<<T.PC<<endl;
+        int tmp=T.upd();
+        if(tmp)
+        {    
+            cout<<tmp<<endl;
+            break;
+        }
+        T.PC+=4;
     }
     return 0;
 }
