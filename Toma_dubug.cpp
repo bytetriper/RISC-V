@@ -17,6 +17,7 @@ class CPU
     public:
     ui reg[32],*mem,qreg[32];
     ui PC,IR,rd,rs1,rs2,imm;
+    bool stuck;
     int commandcnt;
     string rev;
     string revtoma;
@@ -146,7 +147,7 @@ class CPU
     };
     CPUqueue ROB;
     CPUqueue IQ;
-    CPU(string filename):PC(0),IR(0),imm(0),rs1(0),rs2(0),rd(0),commandcnt(0),SLB_cnt(0),RS_cnt(0),rev("IUSBRJE"),revtoma("FLSJE"),IQ(2000)
+    CPU(string filename):PC(0),IR(0),imm(0),rs1(0),rs2(0),rd(0),stuck(0),commandcnt(0),SLB_cnt(0),RS_cnt(0),rev("IUSBRJE"),revtoma("FLSJE"),IQ(50),ROB(50)
     {
         mem=new ui [2000000];
         for(int i=0;i<32;++i)
@@ -156,16 +157,16 @@ class CPU
         if(!f.good())
         {
             printf("Open File Error");
+            exit(0);
             return;
         }
-        char buffer[100];
-        while(1)
+        char buffer[1000];
+        while(f.getline(buffer,100))
         {
-            f.getline(buffer,90);
-            //test(buffer);
-            //test('\n');
-            if(buffer[0]=='#')
-                break;
+            test(buffer);
+            test('\n');
+            //if(buffer[0]=='#')
+                //break;
             if(buffer[0]=='@')
             {
                 PC=Hex_DC(buffer,1,8);
@@ -173,7 +174,7 @@ class CPU
                 //test('\n');
                 continue;
             }
-            
+
             int l=strlen(buffer);
             for(int i=0;i<l;i+=3)
             {    
@@ -846,7 +847,12 @@ class CPU
     {
         //printf("RS2occu:%d",RS[2].occupied?1:0);
         bool commited=0;
-        IF();
+        if(IQ.full())
+            stuck=1;
+        else
+            stuck=0;
+        if(!stuck)
+            IF();
         if(!IQ.empty())
             push_toRS(IQ.front());
         if(!ROB.empty()&&ROB.front().busy==true)//COMMIT
@@ -956,7 +962,8 @@ class CPU
                 ROB.pop();
         }
             //for (int i=0;i<32;i++) printf("round %d i=%d %08x\n",commandcnt,i,reg[i]);
-        PC+=4;
+        if(!stuck)
+            PC+=4;
         reg[0]=qreg[0]=0;//SP
         #ifndef TEST
             printROB();//TEST
@@ -981,8 +988,9 @@ int main()
     fstream f("output.data",ios::out|ios::trunc);
     f.close();
     //freopen("arrar_test1.out","w",stdout);
-    //freopen("td.txt","w",stdout);
-    CPU T("sample.data");
+    //fclose(stderr);
+    //freopen("td.txt","w",stderr);
+    CPU T("testcases/bulgarian.data");
     for(int i=1;i;++i)
     {
        // printf("[Cycle %d]\n",i);//TEST
@@ -992,6 +1000,8 @@ int main()
             cout<<"ANS!!!!!! "<<tmp<<endl;//TEST
             break;
         }
+        if(T.commandcnt%1000==0)
+            printf("%d\n",T.commandcnt);
         #ifndef TEST
         //if(i%1000)
             //printf("%d\n",i);
@@ -1000,7 +1010,7 @@ int main()
             printf("[Cycle %d]end PC:%x Commandcnt:%d\n",i,T.PC,T.commandcnt);//TEST
         #endif
     }
-    //fclose(stdout);
+    //fclose(stderr);
     return 0;
 }
 // PC ALU
