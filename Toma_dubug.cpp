@@ -11,7 +11,7 @@ using namespace std;
 typedef long long ll;
 typedef unsigned int ui;
 #define test(x) cout<<(x);
-
+#define TEST
 class CPU
 {
     public:
@@ -35,44 +35,6 @@ class CPU
                 x=(x<<4)+buf[i]-'0';
         }
         return x;
-    }
-    CPU(string filename):PC(0),IR(0),imm(0),rs1(0),rs2(0),rd(0),commandcnt(0),SLB_cnt(0),RS_cnt(0),rev("IUSBRJE"),revtoma("FLSJE")
-    {
-        mem=new ui [2000000];
-        fstream f;
-        f.open(filename,ios::in);
-        if(!f.good())
-        {
-            printf("Open File Error");
-            return;
-        }
-        char buffer[100];
-        while(1)
-        {
-            f.getline(buffer,90);
-            //test(buffer);
-            //test('\n');
-            if(buffer[0]=='#')
-                break;
-            if(buffer[0]=='@')
-            {
-                PC=Hex_DC(buffer,1,8);
-                //test(PC);
-                //test('\n');
-                continue;
-            }
-            
-            int l=strlen(buffer);
-            for(int i=0;i<l;i+=3)
-            {    
-                mem[PC++]=Hex_DC(buffer,i,i+1);
-                //test(mem[PC-1]);
-                //test(' ');
-            }
-            //test('\n');
-        }
-        f.close();
-        PC=0;
     }
     enum commandtype{
         I,
@@ -145,9 +107,9 @@ class CPU
     {
         public:
         int rear,frt;
-        input q[20000];
+        input q[3000];
         int siz;
-        CPUqueue():rear(0),frt(0){
+        CPUqueue(int t=3):rear(0),frt(0),siz(t){
         }
         inline bool empty()
         {
@@ -175,14 +137,55 @@ class CPU
         inline void pop()
         {
             if(empty()){
-                cerr<<"queue full\n";
+                cerr<<"queue empty\n";
                 return;
             }//MD?
             frt=(frt+1)%siz;
+            q[frt]=input();
         }
     };
     CPUqueue ROB;
-    std::queue<ui>IQ;
+    CPUqueue IQ;
+    CPU(string filename):PC(0),IR(0),imm(0),rs1(0),rs2(0),rd(0),commandcnt(0),SLB_cnt(0),RS_cnt(0),rev("IUSBRJE"),revtoma("FLSJE"),IQ(2000)
+    {
+        mem=new ui [2000000];
+        for(int i=0;i<32;++i)
+            reg[i]=0;
+        fstream f;
+        f.open(filename,ios::in);
+        if(!f.good())
+        {
+            printf("Open File Error");
+            return;
+        }
+        char buffer[100];
+        while(1)
+        {
+            f.getline(buffer,90);
+            //test(buffer);
+            //test('\n');
+            if(buffer[0]=='#')
+                break;
+            if(buffer[0]=='@')
+            {
+                PC=Hex_DC(buffer,1,8);
+                //test(PC);
+                //test('\n');
+                continue;
+            }
+            
+            int l=strlen(buffer);
+            for(int i=0;i<l;i+=3)
+            {    
+                mem[PC++]=Hex_DC(buffer,i,i+1);
+                //test(mem[PC-1]);
+                //test(' ');
+            }
+            //test('\n');
+        }
+        f.close();
+        PC=0;
+    }
     input RS[65];
     commandtype get_type_fromui(ui x)
     {
@@ -345,6 +348,26 @@ class CPU
     ui sign_extend(unsigned x, int beg) {
     return x >> beg  ? -1 ^ (1u << beg) - 1 | x : x;
     }
+    void printIQ()
+    {
+        input tmp[2000];
+        int i;
+        for(i=1;i;i++)
+        {
+            if(!IQ.empty())
+            {
+                tmp[i]=IQ.front();
+                IQ.pop();
+            }
+            else
+                break;
+        }
+        for(int j=1;j<i;j++)
+        {    
+            printf("[IN IQ]opcode:%u type:%c tomatype:%c\n",tmp[j].cmd,rev[tmp[j].type],revtoma[tmp[j].tomatype]);
+            IQ.push(tmp[j]);
+        }
+    }
     void printReg()
     {
         for(int i=0;i<32;++i)
@@ -353,13 +376,9 @@ class CPU
         for(int i=0;i<32;++i)
             printf("%2u ",reg[i]);
         printf("\n");
-    }
-    void IF()//Fetch & Decode
-    {
-        ui x=0;
-        for(int i=3;i>=0;--i)
-            x=(x<<8)|mem[PC+i];
-        IQ.push(x);
+        for(int i=0;i<32;++i)
+            printf("%2u ",qreg[i]);
+        printf("\n");
     }
     int ToRS(input &ip)
     {
@@ -393,60 +412,30 @@ class CPU
     }
     inline void push_toRS(input &ip)
     {
-        ROB.push(ip);
-        ip.tag=ROB.rear;
-        ROB.q[ROB.rear].tag=ToRS(ip);
-        IQ.pop();
-        switch (ip.type)//solve qreg[rd]
-        {
-            case R:
-            case I:
-            case U:
-            case UJ:
-                qreg[ip.dest]=ROB.q[ip.tag].tag;
-        }
-    }
-    input decode(ui x)
-    {   
-        //cout<<bitset<32>(ip.x)<<endl;
-        input ip(x);
-        //printf("[Correct Order]Imm:%d RS1:%u RS2:%u RD:%u\n",(int)Decode(ip.x).imm,Decode(ip.x).rs1,Decode(ip.x).rs2,Decode(ip.x).rd);//TEST
-        ui code=get_opcode(ip.x),f3=get_funct3(ip.x),f7=get_funct7(ip.x);
-        ui opcode=code;
-        ip.type=get_type_fromui(code);
-        switch (ip.type)
-        {
-            case U:
-            case UJ:
-                break;
-            case R:
-                opcode=opcode|(f7<<10);
-            default:
-                opcode=opcode|(f3<<7);
-        }
-        for(int i=0;i<37;++i)
-            if(opcode==cmdset[i])
-            {
-                ip.cmd=cmdset[i];
-                break;
-            }
-        ip.tomatype=get_tomatype(ip.cmd);
-        if(ip.tomatype==LOAD||ip.tomatype==STORE)
+        if((ip.tomatype==LOAD||ip.tomatype==STORE))
         {
             if(SLB_cnt>=32)
-                return input(0);
+            {    
+                #ifndef TEST
+                printf("[SLB]FULL:push error opcode:%u type:%c tomatype:%c\n",ip.cmd,rev[ip.type],rev[ip.tomatype]);
+                #endif
+                return;
+            }
         }
         else
             if(RS_cnt>=32)
-                return input(0);
-        switch (ip.tomatype)
+            {    
+                #ifndef TEST
+                printf("[RS]FULL:push error opcode:%u type:%c tomatype:%c\n",ip.cmd,rev[ip.type],rev[ip.tomatype]);
+                #endif
+                return;
+            }
+        if(ROB.full())
         {
-            case LOAD:
-            case STORE:
-                ip.time=3;
-                break;
-            default:
-                ip.time=1;
+            #ifndef TEST
+                printf("[ROB]FULL:push error opcode:%u type:%c tomatype:%c\n",ip.cmd,rev[ip.type],rev[ip.tomatype]);
+            #endif
+            return;
         }
         rd=get_rd(ip.x);
         rs1=get_rs1(ip.x);
@@ -472,11 +461,6 @@ class CPU
                     ip.vj=reg[rs1];
                 ip.A=imm;
                 ip.dest=rd;
-                if(ip.cmd==JALR)//SP
-                {
-                    //printf("JALR found: rs1:%d qj:%d\n",rs1,qreg[rs1]);//TEST
-                    ip.vk=PC;
-                }
                 break;
             case S:
                 if(qreg[rs1])
@@ -499,11 +483,9 @@ class CPU
                 else
                     ip.vk=reg[rs2];
                 ip.A=imm;//SP?
-                ip.dest=PC;
                 break;
             case U:
             case UJ:
-                ip.vk=PC;
                 ip.A=imm;
                 ip.dest=rd;
                 break;
@@ -511,8 +493,68 @@ class CPU
                 cerr<<"Error at [decoding]: dicover unexpected commandtype"<<endl; 
                 break;
         }
+        ROB.push(ip);
+        ip.tag=ROB.rear;
+        ROB.q[ROB.rear].tag=ToRS(ip);
+        switch (ip.type)//solve qreg[rd]
+        {
+            case R:
+            case I:
+            case U:
+            case UJ:
+                qreg[ip.dest]=ROB.q[ROB.rear].tag;
+        }
+        #ifndef TEST 
+            //printf("[Correct Order]Imm:%d RS1:%u RS2:%u RD:%u\n",(int)Decode(ip.x).imm,Decode(ip.x).rs1,Decode(ip.x).rs2,Decode(ip.x).rd);//TEST
+            printf("[PUSHINGRS...]PC:%x cmd:%x opcode:%u type:%c tomatype:%c qj:%u qk:%u rs1:%u rs2:%u rd:%u imm:%d\n",PC,ip.x,ip.cmd,rev[ip.type],revtoma[ip.tomatype],ip.qj,ip.qk,ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #endif
+        IQ.pop();
+    }
+    input decode(ui x)
+    {   
+        //cout<<bitset<32>(ip.x)<<endl;
+        input ip(x);
+        ui code=get_opcode(ip.x),f3=get_funct3(ip.x),f7=get_funct7(ip.x);
+        ui opcode=code;
+        ip.type=get_type_fromui(code);
+        if(ip.type==ERR)
+        {
+            ip.tag=-1;
+            return ip;
+        }
+        switch (ip.type)
+        {
+            case U:
+            case UJ:
+                break;
+            case R:
+                opcode=opcode|(f7<<10);
+            default:
+                opcode=opcode|(f3<<7);
+        }
+        for(int i=0;i<37;++i)
+            if(opcode==cmdset[i])
+            {
+                ip.cmd=cmdset[i];
+                break;
+            }
+        ip.tomatype=get_tomatype(ip.cmd);
+        if(ip.cmd==JALR)//SP
+        {   
+            #ifndef TEST
+            printf("JALR found: rs1:%d qj:%d\n",rs1,qreg[rs1]);//TEST
+            #endif
+            ip.vk=PC;
+        }
+        if(ip.type==U||ip.type==UJ)
+            ip.vk=PC;
+        if(ip.type==B)
+            ip.dest=PC;
         /*-----TEST-----*/
-        //printf("[DECODING...]PC:%x cmd:%x opcode:%u type:%c tomatype:%c qj:%u qk:%u rs1:%u rs2:%u rd:%u imm:%d\n",PC,ip.x,ip.cmd,rev[ip.type],revtoma[ip.tomatype],ip.qj,ip.qk,ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #ifndef TEST 
+            //printf("[Correct Order]Imm:%d RS1:%u RS2:%u RD:%u\n",(int)Decode(ip.x).imm,Decode(ip.x).rs1,Decode(ip.x).rs2,Decode(ip.x).rd);//TEST
+            printf("[DECODING...]PC:%x cmd:%x opcode:%u type:%c tomatype:%c\n",PC,ip.x,ip.cmd,rev[ip.type],revtoma[ip.tomatype]);//TEST
+        #endif
         return ip;
     }
     ui EXE(input &ip)//MD
@@ -607,7 +649,9 @@ class CPU
             default:
                 cerr<<"unexpected command at [EXE]"<<endl;
         }
-        //printf("[EXECUTING...]opcode:%u type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%d\n",ip.cmd,rev[ip.type],revtoma[ip.tomatype],ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #ifndef TEST
+        printf("[EXECUTING...]opcode:%u type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%d\n",ip.cmd,rev[ip.type],revtoma[ip.tomatype],ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #endif
         return ans;
     }
     ui WB(const input &ip)//MD
@@ -656,13 +700,17 @@ class CPU
                     
                 }break;
         }
-        //printf("[WBING...]opcode:%u type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%d\n",ip.cmd,rev[ip.type],revtoma[ip.tomatype],ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #ifndef TEST
+            printf("[WBING...]opcode:%u type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%d\n",ip.cmd,rev[ip.type],revtoma[ip.tomatype],ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #endif
         return ans;       
     }
     ui COMMIT(input &ip)//MD
     {
         ui ans;
-        //printf("[COMMITING...]opcode:%u solve:%d type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%d\n",ip.cmd,ip.solve?1:0,rev[ip.type],revtoma[ip.tomatype],ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #ifndef TEST
+            printf("[COMMITING...]opcode:%u solve:%d type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%d\n",ip.cmd,ip.solve?1:0,rev[ip.type],revtoma[ip.tomatype],ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #endif
         fstream f("output.data",ios::out|ios::app);
         f<<ip.cmd<<" "<<PC<<" ";
         f.close();
@@ -751,6 +799,15 @@ class CPU
         }
         return ans;
     }
+    void IF()
+    {
+        ui x=0;
+        for(int i=3;i>=0;--i)
+            x=(x<<8)|mem[PC+i];
+        input ip=decode(x);
+        if(ip.tag!=-1)
+            IQ.push(ip);
+    }
     void printROB()
     {
         for(int i=(ROB.frt+1)%ROB.siz;i!=(ROB.rear+1)%ROB.siz;i=(i+1)%ROB.siz)
@@ -758,7 +815,9 @@ class CPU
     }
     void broadcast(int i)
     {
-        //printf("[BROADCASTING] number:%d,opcode:%d\n",i,RS[i].cmd);//TEST
+        #ifndef TEST
+            printf("[BROADCASTING] number:%d,opcode:%d\n",i,RS[i].cmd);//TEST
+        #endif
         for(int j=1;j<=64;++j)
         {
             if(RS[j].qj==i)
@@ -766,14 +825,18 @@ class CPU
                
                 RS[j].qj=0;
                 RS[j].vj=RS[i].A; 
-                //printf("dependency found on rs[%d] opcode[%d] vj[%u]\n",j,RS[j].cmd,RS[j].vj);//TEST
+                #ifndef TEST
+                    printf("dependency found on rs[%d] opcode[%d] vj[%u]\n",j,RS[j].cmd,RS[j].vj);//TEST
+                #endif
             }
             if(RS[j].qk==i)
             {
                 
                 RS[j].qk=0;
                 RS[j].vk=RS[i].A;
-                //printf("dependency found on rs[%d] opcode[%d] vk[%u]\n",j,RS[j].cmd,RS[j].vk);//TEST
+                #ifndef TEST
+                    printf("dependency found on rs[%d] opcode[%d] vk[%u]\n",j,RS[j].cmd,RS[j].vk);//TEST
+                #endif
             }
         }
         for(int j=33;j<=64;++j)//待加入.. LOAD对STORE的依赖
@@ -782,12 +845,14 @@ class CPU
     ui upd()
     {
         //printf("RS2occu:%d",RS[2].occupied?1:0);
+        bool commited=0;
         IF();
-        input tmp=decode(IQ.front());
-        push_toRS(tmp);
+        if(!IQ.empty())
+            push_toRS(IQ.front());
         if(!ROB.empty()&&ROB.front().busy==true)//COMMIT
         {
             ++commandcnt;
+            commited=1;
             if(ROB.front().x==(ui)0x0ff00513)
                 return reg[10]&((ui)255);
             COMMIT(ROB.front());
@@ -798,32 +863,67 @@ class CPU
                 case I:
                 case U:
                 case UJ:
-                    //printf("[COM_dependency]rs:%u\n",ROB.front().dest);//TEST
+                    #ifndef TEST
+                        printf("[COM_dependency]rs:%u\n",ROB.front().dest);//TEST
+                    #endif
                     if(qreg[ROB.front().dest]==ROB.front().tag)
                         qreg[ROB.front().dest]=0;
                     break;
             }
-            //broadcast(ROB.front().tag);
-            /*update cnt*/
+        }
+        int broadcaster=0;
+        for(int i=1;i<=64;++i)//WB
+        {
+            if(RS[i].solve&&(!RS[i].busy))
+            {
+                WB(RS[i]);
+                broadcaster=i;
+                RS[i].busy=true;
+                break;
+            }
+        }
+        for(int i=1;i<=64;++i)//EXE
+        {
+            if((!RS[i].occupied)||RS[i].solve)
+                continue;
+            #ifndef TEST
+                printf("[QUEUE UPDATING...]number:%d type:%c tomatype:%c qj:%u qk:%u rs1:%u rs2:%u rd:%u imm:%d \n",i,rev[RS[i].type],revtoma[RS[i].tomatype],RS[i].qj,RS[i].qk,RS[i].vj,RS[i].vk,RS[i].dest,(int)RS[i].A);//TEST
+            #endif
+            if((RS[i].qj==0&&RS[i].qk==0)&&(!RS[i].busy))
+                RS[i].busy=true;
+            if(RS[i].busy)
+            {
+                EXE(RS[i]);
+                RS[i].solve=true;
+                RS[i].busy=false;
+                continue;
+            }
+            
+        }
+        if(broadcaster&&broadcaster<=32)//WB BROADCAST
+            broadcast(broadcaster);
+        /*update cnt&broadcast*/
+        if(commited)//COMMIT BROADCAST
+        {
             if(ROB.front().tomatype==LOAD||ROB.front().tomatype==STORE)
             {   
+                #ifndef TEST
+                    printf("[broadcasting] LB-operation number:%d\n",ROB.front().tag);
+                #endif
+                int i=ROB.front().tag;
                 for(int j=1;j<=64;++j)
                 {
-                    if(RS[j].qj==ROB.front().tag)
+                    if(RS[j].qj==i)
                     {
                         RS[j].qj=0;
                         RS[j].vj=reg[ROB.front().dest];
                     }
-                    if(RS[j].qk==ROB.front().tag)
+                    if(RS[j].qk==i)
                     {
                         RS[j].qk=0;
                         RS[j].vk=reg[ROB.front().dest];
                     }
                 }
-                ui x=0;
-                for(int i=3;i>=0;--i)
-                    x=(x<<8)|mem[4204+i];
-                //printf("TEST--%u\n",x);//TEST
                 --SLB_cnt;
             }
             else
@@ -846,48 +946,22 @@ class CPU
                 RS_cnt=SLB_cnt=0;
                 reg[0]=0;
                 //for (int i=0;i<32;i++) printf("round %d i=%d %08x\n",commandcnt,i,reg[i]);
-                printROB();//TEST
+                #ifndef TEST
+                    printROB();//TEST
+                    printIQ();
+                #endif
                 return 256;
             }
             else
                 ROB.pop();
+        }
             //for (int i=0;i<32;i++) printf("round %d i=%d %08x\n",commandcnt,i,reg[i]);
-        }
-        int broadcaster=0;
-        for(int i=1;i<=64;++i)//WB
-        {
-            if(RS[i].solve&&(!RS[i].busy))
-            {
-                WB(RS[i]);
-                broadcaster=i;
-                RS[i].busy=true;
-                break;
-            }
-        }
-        for(int i=1;i<=64;++i)//EXE
-        {
-            if((!RS[i].occupied)||RS[i].solve)
-                continue;
-            //printf("[QUEUE UPDATING...]number:%d type:%c tomatype:%c qj:%u qk:%u rs1:%u rs2:%u rd:%u imm:%d \n",i,rev[RS[i].type],revtoma[RS[i].tomatype],RS[i].qj,RS[i].qk,RS[i].vj,RS[i].vk,RS[i].dest,(int)RS[i].A);//TEST
-            if((RS[i].qj==0&&RS[i].qk==0)&&(!RS[i].busy))
-                RS[i].busy=true;
-            if(RS[i].busy)
-            {
-                EXE(RS[i]);
-                RS[i].solve=true;
-                RS[i].busy=false;
-                continue;
-            }
-            
-        }
-        if(broadcaster)
-        {    
-            if(broadcaster<=32)
-                broadcast(broadcaster);
-        }
         PC+=4;
-        reg[0]=0;//SP
-        //printROB();//TEST
+        reg[0]=qreg[0]=0;//SP
+        #ifndef TEST
+            printROB();//TEST
+            printIQ();
+        #endif
         return 256;
     }
     void print()
@@ -908,7 +982,7 @@ int main()
     f.close();
     //freopen("arrar_test1.out","w",stdout);
     //freopen("td.txt","w",stdout);
-    CPU T("basicopt1.data");
+    CPU T("sample.data");
     for(int i=1;i;++i)
     {
        // printf("[Cycle %d]\n",i);//TEST
@@ -918,10 +992,13 @@ int main()
             cout<<"ANS!!!!!! "<<tmp<<endl;//TEST
             break;
         }
-        if(i%1000)
-            printf("%d\n",i);
-        //T.printReg();//TEST
-        //printf("[Cycle %d]end PC:%x Commandcnt:%d\n",i,T.PC,T.commandcnt);//TEST
+        #ifndef TEST
+        //if(i%1000)
+            //printf("%d\n",i);
+        
+            T.printReg();//TEST
+            printf("[Cycle %d]end PC:%x Commandcnt:%d\n",i,T.PC,T.commandcnt);//TEST
+        #endif
     }
     //fclose(stdout);
     return 0;
