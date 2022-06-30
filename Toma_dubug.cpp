@@ -12,13 +12,16 @@ typedef long long ll;
 typedef unsigned int ui;
 #define test(x) cout<<(x);
 #define TEST
+#define CMDOUTPUT
 class CPU
 {
     public:
     ui reg[32],*mem,qreg[32];
     ui PC,IR,rd,rs1,rs2,imm;
     bool stuck;
+    bool pcstuck;
     int commandcnt;
+    int jumpcnt,failcnt;
     string rev;
     string revtoma;
     int SLB_cnt,RS_cnt;
@@ -100,8 +103,9 @@ class CPU
         ui A,vj,vk,qj,qk,dest;
         int time,tag;
         bool busy,solve,occupied;
+        bool predictjump;
         input(int t=0):x(t),type(commandtype::ERR),cmd(command::ERROR),tomatype(NONE){
-            A=vj=vk=qj=qk=dest=time=busy=tag=solve=occupied=0;
+            A=vj=vk=qj=qk=dest=time=busy=tag=solve=occupied=predictjump=0;
         }
     };
     class CPUqueue
@@ -147,7 +151,7 @@ class CPU
     };
     CPUqueue ROB;
     CPUqueue IQ;
-    CPU(string filename):PC(0),IR(0),imm(0),rs1(0),rs2(0),rd(0),stuck(0),commandcnt(0),SLB_cnt(0),RS_cnt(0),rev("IUSBRJE"),revtoma("FLSJE"),IQ(50),ROB(50)
+    CPU(string filename):PC(0),IR(0),imm(0),rs1(0),rs2(0),rd(0),pcstuck(0),stuck(0),commandcnt(0),SLB_cnt(0),RS_cnt(0),rev("IUSBRJE"),revtoma("FLSJE"),IQ(50),ROB(50),jumpcnt(0),failcnt(0)
     {
         mem=new ui [2000000];
         for(int i=0;i<32;++i)
@@ -511,6 +515,12 @@ class CPU
         #endif
         IQ.pop();
     }
+    bool predict_Jump(input &ip)
+    {
+        if(ip.cmd==JAL||ip.cmd==JALR)
+            return true;
+        return true;
+    }
     input decode(ui x)
     {   
         //cout<<bitset<32>(ip.x)<<endl;
@@ -551,6 +561,19 @@ class CPU
             ip.vk=PC;
         if(ip.type==B)
             ip.dest=PC;
+        if(ip.tomatype==LOAD||ip.tomatype==STORE)
+            ip.time=3;
+        else
+            ip.time=1;
+        if(ip.tomatype==JUMP)
+        {    
+            ip.predictjump=predict_Jump(ip);
+            #ifndef TEST
+                printf("[DECODING] B Jump FIND prediction:%c\n",ip.predictjump?'Y':'N');
+            #endif
+            if(ip.predictjump)
+                pcstuck=1;
+        }
         /*-----TEST-----*/
         #ifndef TEST 
             //printf("[Correct Order]Imm:%d RS1:%u RS2:%u RD:%u\n",(int)Decode(ip.x).imm,Decode(ip.x).rs1,Decode(ip.x).rs2,Decode(ip.x).rd);//TEST
@@ -568,6 +591,11 @@ class CPU
             case AUIPC:    
             case JAL:
                 ip.A=ip.vk+ip.A;
+                if(ip.predictjump)
+                {
+                    PC=ip.A-4;
+                    pcstuck=false;
+                }
                 break;
             case BEQ:
             case BNE:
@@ -576,9 +604,19 @@ class CPU
             case BLTU:
             case BGEU:
                 ip.A=ip.dest+ip.A;//dest==PC
+                if(ip.predictjump)
+                {
+                    PC=ip.A-4;
+                    pcstuck=false;
+                }
                 break;
             case JALR:
                 ip.A=ip.vj+(ip.A&-2);
+                if(ip.predictjump)
+                {
+                    PC=ip.A-4;
+                    pcstuck=false;
+                }
                 break;
             case LB:
             case LH:   
@@ -711,10 +749,12 @@ class CPU
         ui ans;
         #ifndef TEST
             printf("[COMMITING...]opcode:%u solve:%d type:%c tomatype:%c rs1:%u rs2:%u rd:%u imm:%d\n",ip.cmd,ip.solve?1:0,rev[ip.type],revtoma[ip.tomatype],ip.vj,ip.vk,ip.dest,(int)ip.A);//TEST
+        #endif    
+        #ifndef CMDOUTPUT
+            fstream f("output.data",ios::out|ios::app);
+            f<<ip.cmd<<" "<<PC<<" ";
+            f.close();
         #endif
-        fstream f("output.data",ios::out|ios::app);
-        f<<ip.cmd<<" "<<PC<<" ";
-        f.close();
         switch (ip.cmd)
         {
             case LUI:
@@ -724,7 +764,6 @@ class CPU
             case JAL:
             case JALR:
                 reg[ip.dest]=ip.vk+4;
-                PC=ip.A;//MD
                 //printf("JAL Jumping %u %d PC:%u\n",ip.vk,(int)ip.A,PC);//TEST
                 break;
             case BEQ:
@@ -733,14 +772,6 @@ class CPU
             case BGE:
             case BLTU:
             case BGEU:
-                if(!ip.solve)
-                {    
-                    PC=ip.A;//dest==PC (at that time)
-                }
-                else
-                {   
-                    1; 
-                }
                 break;
             case LB:
                 reg[ip.dest]=mem[ip.A];
@@ -812,7 +843,7 @@ class CPU
     void printROB()
     {
         for(int i=(ROB.frt+1)%ROB.siz;i!=(ROB.rear+1)%ROB.siz;i=(i+1)%ROB.siz)
-            printf("[IN ROB]number:%d solve:%d busy:%d type:%c tomatype:%c qj:%u qk:%u rd:%u imm:%d\n",ROB.q[i].tag,ROB.q[i].solve?1:0,ROB.q[i].busy?1:0,rev[ROB.q[i].type],revtoma[ROB.q[i].tomatype],ROB.q[i].qj,ROB.q[i].qk,ROB.q[i].dest,(int)ROB.q[i].A);
+            printf("[IN ROB]number:%d time:%d solve:%d busy:%d type:%c tomatype:%c qj:%u qk:%u rd:%u imm:%d\n",ROB.q[i].tag,ROB.q[i].time,ROB.q[i].solve?1:0,ROB.q[i].busy?1:0,rev[ROB.q[i].type],revtoma[ROB.q[i].tomatype],ROB.q[i].qj,ROB.q[i].qk,ROB.q[i].dest,(int)ROB.q[i].A);
     }
     void broadcast(int i)
     {
@@ -823,18 +854,22 @@ class CPU
         {
             if(RS[j].qj==i)
             {
-               
                 RS[j].qj=0;
-                RS[j].vj=RS[i].A; 
+                if(RS[i].cmd!=JAL&&RS[i].cmd!=JALR)
+                    RS[j].vj=RS[i].A; 
+                else
+                    RS[j].vj=RS[i].vk+4;
                 #ifndef TEST
                     printf("dependency found on rs[%d] opcode[%d] vj[%u]\n",j,RS[j].cmd,RS[j].vj);//TEST
                 #endif
             }
             if(RS[j].qk==i)
             {
-                
                 RS[j].qk=0;
-                RS[j].vk=RS[i].A;
+                if(RS[i].cmd!=JAL&&RS[i].cmd!=JALR)
+                    RS[j].vk=RS[i].A;
+                else
+                    RS[j].vk=RS[i].vk+4;
                 #ifndef TEST
                     printf("dependency found on rs[%d] opcode[%d] vk[%u]\n",j,RS[j].cmd,RS[j].vk);//TEST
                 #endif
@@ -845,17 +880,17 @@ class CPU
     }
     ui upd()
     {
-        //printf("RS2occu:%d",RS[2].occupied?1:0);
+        //printf("RS2occu:%d",RS[2].occupied?1:0)
         bool commited=0;
         if(IQ.full())
             stuck=1;
         else
             stuck=0;
-        if(!stuck)
+        if(!stuck&&!pcstuck)
             IF();
-        if(!IQ.empty())
-            push_toRS(IQ.front());
-        if(!ROB.empty()&&ROB.front().busy==true)//COMMIT
+        if(!ROB.empty()&&ROB.front().busy==true)
+            --ROB.front().time;
+        if(!ROB.empty()&&ROB.front().busy==true&&(!ROB.front().time))//COMMIT
         {
             ++commandcnt;
             commited=1;
@@ -863,6 +898,8 @@ class CPU
                 return reg[10]&((ui)255);
             COMMIT(ROB.front());
             /*refresh reg dependency*/
+            if(ROB.front().tomatype==JUMP)
+                ++jumpcnt;
             switch (ROB.front().type)
             {
                 case R:
@@ -876,6 +913,7 @@ class CPU
                         qreg[ROB.front().dest]=0;
                     break;
             }
+            reg[0]=qreg[0]=0;//SP
         }
         int broadcaster=0;
         for(int i=1;i<=64;++i)//WB
@@ -906,6 +944,8 @@ class CPU
             }
             
         }
+        if(!IQ.empty())
+            push_toRS(IQ.front());
         if(broadcaster&&broadcaster<=32)//WB BROADCAST
             broadcast(broadcaster);
         /*update cnt&broadcast*/
@@ -938,33 +978,53 @@ class CPU
                 --RS_cnt;
             }
             RS[ROB.front().tag]=input();
-            if(ROB.front().tomatype==JUMP&&(!ROB.front().solve))
+            if(ROB.front().tomatype==JUMP)
             {
                 /*clear*/
-                while(!IQ.empty())
-                    IQ.pop();
-                for(int i=0;i<64;++i)
-                    RS[i]=input();
-                for(int i=0;i<32;++i)
-                    qreg[i]=0;
-                while(!ROB.empty())
+                if((ROB.front().solve==ROB.front().predictjump))//Not taken
+                {    
+                    ++failcnt;
+                    if(ROB.front().type==B)//b jump
+                    {
+                        if(!ROB.front().solve&&!ROB.front().predictjump) 
+                            PC=ROB.front().A;
+                        if(ROB.front().solve&&ROB.front().predictjump)
+                            PC=ROB.front().dest+4;
+                    }
+                    else
+                        PC=ROB.front().A;//jal or jalr
+                    while(!IQ.empty())
+                        IQ.pop();
+                    for(int i=0;i<64;++i)
+                        RS[i]=input();
+                    for(int i=0;i<32;++i)
+                        qreg[i]=0;
+                    while(!ROB.empty())
+                        ROB.pop();
+                    RS_cnt=SLB_cnt=0;
+                    pcstuck=stuck=0;
+                    reg[0]=0;
+                    //for (int i=0;i<32;i++) printf("round %d i=%d %08x\n",commandcnt,i,reg[i]);
+                    return 256;
+                }
+                else//taken
+                {
                     ROB.pop();
-                RS_cnt=SLB_cnt=0;
-                reg[0]=0;
-                //for (int i=0;i<32;i++) printf("round %d i=%d %08x\n",commandcnt,i,reg[i]);
-                #ifndef TEST
-                    printROB();//TEST
-                    printIQ();
-                #endif
-                return 256;
+                    #ifndef TEST
+                        printROB();//TEST
+                        printIQ();
+                    #endif
+                }
             }
             else
+            {    
                 ROB.pop();
+            }
         }
             //for (int i=0;i<32;i++) printf("round %d i=%d %08x\n",commandcnt,i,reg[i]);
-        if(!stuck)
+        if(!stuck&&!pcstuck)
             PC+=4;
-        reg[0]=qreg[0]=0;//SP
+        
         #ifndef TEST
             printROB();//TEST
             printIQ();
@@ -985,21 +1045,29 @@ class CPU
 
 int main()
 {
+    #ifndef CMDOUTPUT
     fstream f("output.data",ios::out|ios::trunc);
     f.close();
     //freopen("arrar_test1.out","w",stdout);
-    //fclose(stderr);
+    #endif
+    fclose(stderr);
+    #ifndef TEST
+    #endif
     //freopen("td.txt","w",stderr);
-    CPU T("testcases/bulgarian.data");
+    CPU T("testcases/expr.data");
     for(int i=1;i;++i)
     {
-       // printf("[Cycle %d]\n",i);//TEST
+        #ifndef TEST
+            printf("[Cycle %d]\n",i);//TEST
+        #endif
         int tmp=T.upd();
         if(tmp!=256)
         {    
             cout<<"ANS!!!!!! "<<tmp<<endl;//TEST
+            cout<<"fail rate:"<<(double)T.failcnt/T.jumpcnt<<endl;
             break;
         }
+        cout<<i<<endl;
         if(T.commandcnt%1000==0)
             printf("%d\n",T.commandcnt);
         #ifndef TEST
@@ -1007,10 +1075,16 @@ int main()
             //printf("%d\n",i);
         
             T.printReg();//TEST
-            printf("[Cycle %d]end PC:%x Commandcnt:%d\n",i,T.PC,T.commandcnt);//TEST
+            printf("[Cycle %d]end PC:%x Commandcnt:%d stuck:%c PCstuck:%c\n",i,T.PC,T.commandcnt,T.stuck?'Y':'N',T.pcstuck?'Y':'N');//TEST
         #endif
     }
     //fclose(stderr);
     return 0;
 }
 // PC ALU
+/*
+P\S  True False
+True  N     Y
+False Y     N
+
+*/
